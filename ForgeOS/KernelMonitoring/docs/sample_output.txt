@@ -1,0 +1,34 @@
+============================================================
+              KERNEL MONITORING SYSTEM
+============================================================
+
+CPU INFORMATION
+------------------------------------------------------------
+CPU Model       : 13th Gen Intel(R) Core(TM) i5-1334U
+CPU Cores       : 6
+CPU Frequency   : 2496.000 MHz
+
+MEMORY INFORMATION
+------------------------------------------------------------
+Total Memory    : System dependent
+Available Memory: System dependent
+
+PROCESS INFORMATION
+------------------------------------------------------------
+PID      PROCESS NAME                    STATE    MEMORY(KB)   CPU(%)
+---------------------------------------------------------------------
+1        (systemd)                       S        --------     Normal
+2        (kthreadd)                      S        --------     Normal
+...      ...                             ...      ...          ...
+
+STATUS
+------------------------------------------------------------
+Normal          : Normal resource usage
+HIGH CPU        : High CPU usage detected
+HIGH MEMORY     : High memory usage detected
+HIGH CPU+MEM    : High CPU and memory usage detected
+
+============================================================
+       MONITORING WILL REFRESH EVERY FEW SECONDS
+       Press Ctrl+C to exit
+============================================================

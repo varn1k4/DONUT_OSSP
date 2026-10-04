@@ -1,0 +1,530 @@
+```c
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <signal.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <sys/mman.h>
+#include <string.h>
+#include <pthread.h>
+
+/*
+===========================================================
+        KERNEL MONITORING SYSTEM
+===========================================================
+
+Process Management
+Process States
+Signals and Pipes
+Memory Management
+Linux File I/O
+Threads and Synchronization
+
+All demonstrations execute continuously.
+Press Ctrl+C to stop.
+===========================================================
+*/
+
+volatile sig_atomic_t running = 1;
+
+/* =========================================================
+   SIGNAL HANDLER
+   ========================================================= */
+
+void signal_handler(int sig)
+{
+    if (sig == SIGINT)
+    {
+        printf("\n\nSIGINT received.\n");
+        printf("Stopping monitoring safely...\n");
+
+        running = 0;
+    }
+}
+
+/* =========================================================
+   PROCESS MANAGEMENT
+   ========================================================= */
+
+void demonstrate_co1()
+{
+    pid_t pid;
+
+    printf("\n========================================\n");
+    printf("PROCESS MANAGEMENT\n");
+    printf("========================================\n");
+
+    printf("Parent PID : %d\n", getpid());
+
+    pid = fork();
+
+    if (pid < 0)
+    {
+        perror("fork failed");
+        return;
+    }
+
+    if (pid == 0)
+    {
+        printf("Child process created.\n");
+        printf("Child PID  : %d\n", getpid());
+        printf("Parent PID : %d\n", getppid());
+
+        printf("Child process executing...\n");
+
+        exit(0);
+    }
+    else
+    {
+        printf("Child PID : %d\n", pid);
+        printf("Parent waiting for child...\n");
+
+        wait(NULL);
+
+        printf("Child process completed.\n");
+        printf("Parent process continuing.\n");
+    }
+}
+
+/* =========================================================
+   PROCESS STATES
+   ========================================================= */
+
+void demonstrate_co2()
+{
+    char path[100];
+    char line[256];
+
+    printf("\n========================================\n");
+    printf("PROCESS STATES\n");
+    printf("========================================\n");
+
+    snprintf(
+        path,
+        sizeof(path),
+        "/proc/%d/status",
+        getpid()
+    );
+
+    FILE *file = fopen(path, "r");
+
+    if (file == NULL)
+    {
+        perror("Unable to open process status");
+        return;
+    }
+
+    while (fgets(line, sizeof(line), file))
+    {
+        if (strncmp(line, "Name:", 5) == 0 ||
+            strncmp(line, "State:", 6) == 0 ||
+            strncmp(line, "Pid:", 4) == 0 ||
+            strncmp(line, "PPid:", 5) == 0)
+        {
+            printf("%s", line);
+        }
+    }
+
+    fclose(file);
+
+    printf("Process information obtained from /proc.\n");
+}
+
+/* =========================================================
+   SIGNALS AND PIPES
+   ========================================================= */
+
+void demonstrate_co3()
+{
+    int pipefd[2];
+    pid_t pid;
+
+    char message[] = "Hello from child through pipe";
+    char buffer[100];
+
+    printf("\n========================================\n");
+    printf("SIGNALS AND PIPES\n");
+    printf("========================================\n");
+
+    if (pipe(pipefd) == -1)
+    {
+        perror("pipe failed");
+        return;
+    }
+
+    pid = fork();
+
+    if (pid < 0)
+    {
+        perror("fork failed");
+
+        close(pipefd[0]);
+        close(pipefd[1]);
+
+        return;
+    }
+
+    if (pid == 0)
+    {
+        close(pipefd[0]);
+
+        write(
+            pipefd[1],
+            message,
+            strlen(message) + 1
+        );
+
+        printf("Child PID : %d\n", getpid());
+        printf("Message sent through pipe.\n");
+
+        close(pipefd[1]);
+
+        exit(0);
+    }
+    else
+    {
+        close(pipefd[1]);
+
+        read(
+            pipefd[0],
+            buffer,
+            sizeof(buffer)
+        );
+
+        printf("Parent PID : %d\n", getpid());
+        printf("Received message: %s\n", buffer);
+
+        close(pipefd[0]);
+
+        wait(NULL);
+
+        printf("Pipe communication completed.\n");
+    }
+}
+
+/* =========================================================
+   MEMORY MANAGEMENT
+   ========================================================= */
+
+void demonstrate_co4()
+{
+    int *memory;
+    void *mapped_memory;
+
+    printf("\n========================================\n");
+    printf("MEMORY MANAGEMENT\n");
+    printf("========================================\n");
+
+    /* malloc */
+
+    memory = (int *)malloc(5 * sizeof(int));
+
+    if (memory == NULL)
+    {
+        printf("malloc failed.\n");
+        return;
+    }
+
+    for (int i = 0; i < 5; i++)
+    {
+        memory[i] = (i + 1) * 10;
+    }
+
+    printf("malloc() allocated memory.\n");
+
+    printf("Stored values: ");
+
+    for (int i = 0; i < 5; i++)
+    {
+        printf("%d ", memory[i]);
+    }
+
+    printf("\n");
+
+    /* free */
+
+    free(memory);
+
+    printf("free() released allocated memory.\n");
+
+    /* mmap */
+
+    mapped_memory = mmap(
+        NULL,
+        4096,
+        PROT_READ | PROT_WRITE,
+        MAP_PRIVATE | MAP_ANONYMOUS,
+        -1,
+        0
+    );
+
+    if (mapped_memory == MAP_FAILED)
+    {
+        perror("mmap failed");
+        return;
+    }
+
+    strcpy(
+        (char *)mapped_memory,
+        "Memory mapped successfully."
+    );
+
+    printf("%s\n", (char *)mapped_memory);
+
+    /* munmap */
+
+    munmap(mapped_memory, 4096);
+
+    printf("munmap() released mapped memory.\n");
+}
+
+/* =========================================================
+   LINUX FILE I/O
+   ========================================================= */
+
+void demonstrate_co5()
+{
+    char line[256];
+
+    printf("\n========================================\n");
+    printf("LINUX FILE I/O\n");
+    printf("========================================\n");
+
+    printf("Reading information from /proc/meminfo\n");
+
+    FILE *memory_file = fopen(
+        "/proc/meminfo",
+        "r"
+    );
+
+    if (memory_file == NULL)
+    {
+        perror("Unable to open /proc/meminfo");
+        return;
+    }
+
+    int count = 0;
+
+    while (fgets(line, sizeof(line), memory_file))
+    {
+        if (strncmp(line, "MemTotal:", 9) == 0 ||
+            strncmp(line, "MemFree:", 8) == 0 ||
+            strncmp(line, "MemAvailable:", 13) == 0)
+        {
+            printf("%s", line);
+
+            count++;
+        }
+
+        if (count == 3)
+        {
+            break;
+        }
+    }
+
+    fclose(memory_file);
+
+    printf("\nReading CPU information from /proc/cpuinfo\n");
+
+    FILE *cpu_file = fopen(
+        "/proc/cpuinfo",
+        "r"
+    );
+
+    if (cpu_file == NULL)
+    {
+        perror("Unable to open /proc/cpuinfo");
+        return;
+    }
+
+    while (fgets(line, sizeof(line), cpu_file))
+    {
+        if (strncmp(line, "model name", 10) == 0)
+        {
+            printf("%s", line);
+
+            break;
+        }
+    }
+
+    fclose(cpu_file);
+
+    printf("Linux /proc file reading completed.\n");
+}
+
+/* =========================================================
+   THREADS AND SYNCHRONIZATION
+   ========================================================= */
+
+int shared_counter = 0;
+
+pthread_mutex_t lock;
+
+void *worker(void *arg)
+{
+    int thread_id = *(int *)arg;
+
+    pthread_mutex_lock(&lock);
+
+    printf(
+        "Thread %d entered critical section.\n",
+        thread_id
+    );
+
+    shared_counter++;
+
+    printf(
+        "Thread %d updated counter to %d.\n",
+        thread_id,
+        shared_counter
+    );
+
+    pthread_mutex_unlock(&lock);
+
+    return NULL;
+}
+
+void demonstrate_co6()
+{
+    pthread_t thread1;
+    pthread_t thread2;
+
+    int id1 = 1;
+    int id2 = 2;
+
+    printf("\n========================================\n");
+    printf("THREADS AND SYNCHRONIZATION\n");
+    printf("========================================\n");
+
+    shared_counter = 0;
+
+    pthread_mutex_init(
+        &lock,
+        NULL
+    );
+
+    pthread_create(
+        &thread1,
+        NULL,
+        worker,
+        &id1
+    );
+
+    pthread_create(
+        &thread2,
+        NULL,
+        worker,
+        &id2
+    );
+
+    pthread_join(
+        thread1,
+        NULL
+    );
+
+    pthread_join(
+        thread2,
+        NULL
+    );
+
+    printf(
+        "Final shared counter : %d\n",
+        shared_counter
+    );
+
+    pthread_mutex_destroy(&lock);
+
+    printf("Thread execution completed.\n");
+}
+
+/* =========================================================
+   MAIN
+   ========================================================= */
+
+int main()
+{
+    signal(
+        SIGINT,
+        signal_handler
+    );
+
+    printf("\n");
+    printf("====================================================\n");
+    printf("             KERNEL MONITORING SYSTEM\n");
+    printf("====================================================\n");
+
+    printf(
+        "All demonstrations will run continuously.\n"
+    );
+
+    printf(
+        "Press Ctrl+C to stop the program.\n"
+    );
+
+    while (running)
+    {
+        printf("\n\n");
+
+        printf(
+            "****************************************************\n"
+        );
+
+        printf(
+            "              NEW MONITORING CYCLE\n"
+        );
+
+        printf(
+            "****************************************************\n"
+        );
+
+        demonstrate_co1();
+
+        demonstrate_co2();
+
+        demonstrate_co3();
+
+        demonstrate_co4();
+
+        demonstrate_co5();
+
+        demonstrate_co6();
+
+        printf("\n");
+
+        printf(
+            "====================================================\n"
+        );
+
+        printf(
+            "One complete monitoring cycle finished.\n"
+        );
+
+        printf(
+            "Starting next cycle...\n"
+        );
+
+        printf(
+            "====================================================\n"
+        );
+
+        sleep(3);
+    }
+
+    printf("\n");
+
+    printf(
+        "====================================================\n"
+    );
+
+    printf(
+        "          KERNEL MONITORING SYSTEM STOPPED\n"
+    );
+
+    printf(
+        "====================================================\n"
+    );
+
+    return 0;
+}
+```

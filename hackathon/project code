@@ -1,0 +1,280 @@
+/*
+ * mini_strace.c - a simplified strace-like system call tracer
+ * OS project: Mini strace-like Process Monitoring Tool
+ *
+ * Platform : Linux x86-64
+ * Build    : gcc -Wall -O2 -o mini_strace mini_strace.c
+ * Usage    : ./mini_strace [-c] [-o file] command [args...]
+ *              -c        print a summary table of syscall counts at the end
+ *              -o file   write the trace to a file instead of stderr
+ *
+ * How it works:
+ *   1. fork() a child.
+ *   2. Child calls ptrace(PTRACE_TRACEME) and then execvp() the target program.
+ *   3. Parent loops: PTRACE_SYSCALL -> waitpid -> PTRACE_GETREGS.
+ *      The child stops twice per syscall: once at entry (args valid),
+ *      once at exit (return value valid).
+ *   4. Syscall number is in orig_rax, args in rdi, rsi, rdx, r10, r8, r9,
+ *      return value in rax.
+ */
+#define _GNU_SOURCE
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <ctype.h>
+#include <errno.h>
+#include <signal.h>
+#include <unistd.h>
+#include <sys/ptrace.h>
+#include <sys/wait.h>
+#include <sys/user.h>
+
+/* Argument type codes:
+ *   d = signed decimal   u = unsigned decimal   x = hex   p = pointer
+ *   s = NUL-terminated string in tracee memory
+ *   b = buffer whose length is the next argument (e.g. write)          */
+typedef struct { const char *name; int nargs; const char *types; } sc_t;
+
+static const sc_t T[] = {
+    [0]   = {"read", 3, "dpu"},         [1]   = {"write", 3, "dbu"},
+    [2]   = {"open", 3, "sxx"},         [3]   = {"close", 1, "d"},
+    [4]   = {"stat", 2, "sp"},          [5]   = {"fstat", 2, "dp"},
+    [6]   = {"lstat", 2, "sp"},         [8]   = {"lseek", 3, "ddd"},
+    [9]   = {"mmap", 6, "puxxdx"},      [10]  = {"mprotect", 3, "pux"},
+    [11]  = {"munmap", 2, "pu"},        [12]  = {"brk", 1, "p"},
+    [13]  = {"rt_sigaction", 4, "dppu"},[14]  = {"rt_sigprocmask", 4, "dppu"},
+    [16]  = {"ioctl", 3, "dxx"},        [17]  = {"pread64", 4, "dpuu"},
+    [21]  = {"access", 2, "sx"},        [22]  = {"pipe", 1, "p"},
+    [32]  = {"dup", 1, "d"},            [33]  = {"dup2", 2, "dd"},
+    [35]  = {"nanosleep", 2, "pp"},     [39]  = {"getpid", 0, ""},
+    [56]  = {"clone", 5, "xxppx"},      [57]  = {"fork", 0, ""},
+    [58]  = {"vfork", 0, ""},           [59]  = {"execve", 3, "spp"},
+    [60]  = {"exit", 1, "d"},           [61]  = {"wait4", 4, "dpxp"},
+    [62]  = {"kill", 2, "dd"},          [63]  = {"uname", 1, "p"},
+    [72]  = {"fcntl", 3, "ddx"},        [79]  = {"getcwd", 2, "pu"},
+    [80]  = {"chdir", 1, "s"},          [83]  = {"mkdir", 2, "sx"},
+    [84]  = {"rmdir", 1, "s"},          [87]  = {"unlink", 1, "s"},
+    [89]  = {"readlink", 3, "spu"},     [96]  = {"gettimeofday", 2, "pp"},
+    [102] = {"getuid", 0, ""},          [104] = {"getgid", 0, ""},
+    [107] = {"geteuid", 0, ""},         [108] = {"getegid", 0, ""},
+    [158] = {"arch_prctl", 2, "xp"},    [202] = {"futex", 6, "pdxppx"},
+    [217] = {"getdents64", 3, "dpu"},   [218] = {"set_tid_address", 1, "p"},
+    [228] = {"clock_gettime", 2, "dp"}, [231] = {"exit_group", 1, "d"},
+    [257] = {"openat", 4, "dsxx"},      [262] = {"newfstatat", 4, "dspx"},
+    [273] = {"set_robust_list", 2, "pu"},[302] = {"prlimit64", 4, "dxpp"},
+    [318] = {"getrandom", 3, "pux"},    [332] = {"statx", 5, "dsxxp"},
+    [334] = {"rseq", 4, "pxxx"},
+};
+#define NT ((int)(sizeof(T) / sizeof(T[0])))
+
+static unsigned long counts[512];
+static FILE *out;
+
+/* Read len bytes from the tracee's memory. Returns bytes read or -1. */
+static int read_mem(pid_t pid, unsigned long addr, char *buf, size_t len)
+{
+    size_t i = 0;
+    while (i < len) {
+        errno = 0;
+        long w = ptrace(PTRACE_PEEKDATA, pid, addr + i, 0);
+        if (errno) return i ? (int)i : -1;
+        size_t c = (len - i < sizeof w) ? len - i : sizeof w;
+        memcpy(buf + i, &w, c);
+        i += c;
+    }
+    return (int)i;
+}
+
+/* Append a quoted, escaped version of s[0..n) to d. Returns chars written. */
+static int quote(char *d, size_t cap, const unsigned char *s, int n, int more)
+{
+    int p = 0;
+    p += snprintf(d + p, cap - p, "\"");
+    for (int i = 0; i < n; i++) {
+        unsigned char c = s[i];
+        if (c == '\n')      p += snprintf(d + p, cap - p, "\\n");
+        else if (c == '\t') p += snprintf(d + p, cap - p, "\\t");
+        else if (c == '\r') p += snprintf(d + p, cap - p, "\\r");
+        else if (c == '"')  p += snprintf(d + p, cap - p, "\\\"");
+        else if (c == '\\') p += snprintf(d + p, cap - p, "\\\\");
+        else if (isprint(c)) p += snprintf(d + p, cap - p, "%c", c);
+        else                p += snprintf(d + p, cap - p, "\\%03o", c);
+    }
+    p += snprintf(d + p, cap - p, "\"%s", more ? "..." : "");
+    return p;
+}
+
+/* Read a NUL-terminated string (max 32 chars shown) and format it. */
+static int fmt_cstr(pid_t pid, unsigned long addr, char *d, size_t cap)
+{
+    char buf[33];
+    if (!addr) return snprintf(d, cap, "NULL");
+    int n = read_mem(pid, addr, buf, 32);
+    if (n < 0) return snprintf(d, cap, "0x%lx", addr);
+    int len = 0;
+    while (len < n && buf[len]) len++;
+    int more = (len == 32);
+    return quote(d, cap, (unsigned char *)buf, len, more);
+}
+
+/* Read a counted buffer (max 32 bytes shown) and format it. */
+static int fmt_buf(pid_t pid, unsigned long addr, unsigned long len, char *d, size_t cap)
+{
+    char buf[33];
+    if (!addr) return snprintf(d, cap, "NULL");
+    int want = len > 32 ? 32 : (int)len;
+    int n = read_mem(pid, addr, buf, want);
+    if (n < 0) return snprintf(d, cap, "0x%lx", addr);
+    return quote(d, cap, (unsigned char *)buf, n, len > 32);
+}
+
+static const char *errname(int e)
+{
+    switch (e) {
+    case EPERM: return "EPERM";   case ENOENT: return "ENOENT";
+    case EINTR: return "EINTR";   case EIO: return "EIO";
+    case EBADF: return "EBADF";   case ECHILD: return "ECHILD";
+    case EAGAIN: return "EAGAIN"; case ENOMEM: return "ENOMEM";
+    case EACCES: return "EACCES"; case EFAULT: return "EFAULT";
+    case EEXIST: return "EEXIST"; case ENOTDIR: return "ENOTDIR";
+    case EISDIR: return "EISDIR"; case EINVAL: return "EINVAL";
+    case ENOTTY: return "ENOTTY"; case ENOSYS: return "ENOSYS";
+    default: return "E?";
+    }
+}
+
+/* Build "name(arg1, arg2, ...)" from the registers at syscall entry. */
+static void format_entry(pid_t pid, struct user_regs_struct *r, char *line, size_t cap)
+{
+    unsigned long nr = r->orig_rax;
+    unsigned long a[6] = {r->rdi, r->rsi, r->rdx, r->r10, r->r8, r->r9};
+    int pos = 0;
+
+    if (nr < (unsigned long)NT && T[nr].name) {
+        pos += snprintf(line + pos, cap - pos, "%s(", T[nr].name);
+        for (int i = 0; i < T[nr].nargs; i++) {
+            if (i) pos += snprintf(line + pos, cap - pos, ", ");
+            switch (T[nr].types[i]) {
+            case 'd': pos += snprintf(line + pos, cap - pos, "%ld", (long)(int)a[i]); break;
+            case 'u': pos += snprintf(line + pos, cap - pos, "%lu", a[i]); break;
+            case 'x': pos += snprintf(line + pos, cap - pos, "0x%lx", a[i]); break;
+            case 'p': pos += a[i] ? snprintf(line + pos, cap - pos, "0x%lx", a[i])
+                                  : snprintf(line + pos, cap - pos, "NULL"); break;
+            case 's': pos += fmt_cstr(pid, a[i], line + pos, cap - pos); break;
+            case 'b': pos += fmt_buf(pid, a[i], a[i + 1], line + pos, cap - pos); break;
+            }
+        }
+        pos += snprintf(line + pos, cap - pos, ")");
+    } else {
+        pos += snprintf(line + pos, cap - pos, "syscall_%lu(0x%lx, 0x%lx, 0x%lx)",
+                        nr, a[0], a[1], a[2]);
+    }
+}
+
+static void print_summary(void)
+{
+    unsigned long total = 0;
+    fprintf(out, "\n%-20s %10s\n", "syscall", "calls");
+    fprintf(out, "-------------------- ----------\n");
+    for (int i = 0; i < 512; i++) {
+        if (!counts[i]) continue;
+        char tmp[32];
+        const char *nm = (i < NT && T[i].name) ? T[i].name
+                         : (snprintf(tmp, sizeof tmp, "syscall_%d", i), tmp);
+        fprintf(out, "%-20s %10lu\n", nm, counts[i]);
+        total += counts[i];
+    }
+    fprintf(out, "-------------------- ----------\n");
+    fprintf(out, "%-20s %10lu\n", "total", total);
+}
+
+int main(int argc, char **argv)
+{
+    int summary = 0, i = 1;
+    out = stderr;
+
+    while (i < argc && argv[i][0] == '-') {
+        if (!strcmp(argv[i], "-c")) summary = 1;
+        else if (!strcmp(argv[i], "-o") && i + 1 < argc) {
+            out = fopen(argv[++i], "w");
+            if (!out) { perror("fopen"); return 1; }
+        } else { fprintf(stderr, "unknown option %s\n", argv[i]); return 1; }
+        i++;
+    }
+    if (i >= argc) {
+        fprintf(stderr, "usage: %s [-c] [-o file] command [args...]\n", argv[0]);
+        return 1;
+    }
+
+    pid_t pid = fork();
+    if (pid < 0) { perror("fork"); return 1; }
+
+    if (pid == 0) {                                   /* ---- child ---- */
+        if (ptrace(PTRACE_TRACEME, 0, 0, 0) < 0) { perror("ptrace"); _exit(1); }
+        execvp(argv[i], argv + i);
+        perror("execvp");
+        _exit(127);
+    }
+
+    /* ---- parent (tracer) ---- */
+    int status, in_call = 0, sig = 0, exit_code = 0;
+    struct user_regs_struct regs;
+    char line[1024];
+
+    waitpid(pid, &status, 0);                         /* child stops after exec */
+    ptrace(PTRACE_SETOPTIONS, pid, 0, PTRACE_O_TRACESYSGOOD | PTRACE_O_EXITKILL);
+
+    for (;;) {
+        ptrace(PTRACE_SYSCALL, pid, 0, sig);          /* run until next syscall stop */
+        sig = 0;
+        if (waitpid(pid, &status, 0) < 0) break;
+
+        if (WIFEXITED(status)) {
+            exit_code = WEXITSTATUS(status);
+            fprintf(out, "+++ exited with %d +++\n", exit_code);
+            break;
+        }
+        if (WIFSIGNALED(status)) {
+            fprintf(out, "+++ killed by signal %d +++\n", WTERMSIG(status));
+            break;
+        }
+        if (!WIFSTOPPED(status)) continue;
+
+        int s = WSTOPSIG(status);
+        if (s != (SIGTRAP | 0x80)) {                  /* a normal signal, not a syscall stop */
+            if (s != SIGTRAP) {
+                fprintf(out, "--- signal %d (%s) ---\n", s, strsignal(s));
+                sig = s;                              /* deliver it to the child */
+            }
+            continue;
+        }
+
+        ptrace(PTRACE_GETREGS, pid, 0, &regs);
+
+        if (!in_call) {                               /* ----- syscall ENTRY ----- */
+            unsigned long nr = regs.orig_rax;
+            if (nr < 512) counts[nr]++;
+            format_entry(pid, &regs, line, sizeof line);
+            /* exit/exit_group never return, so print them right away */
+            if (nr == 60 || nr == 231) {
+                fprintf(out, "%s = ?\n", line);
+                fflush(out);
+            }
+            in_call = 1;
+        } else {                                      /* ----- syscall EXIT ------ */
+            long ret = (long)regs.rax;
+            if (ret < 0 && ret > -4096)
+                fprintf(out, "%s = -1 %s (%s)\n", line, errname((int)-ret), strerror((int)-ret));
+            else if (regs.orig_rax == 9 || regs.orig_rax == 12)
+                fprintf(out, "%s = 0x%lx\n", line, (unsigned long)ret);
+            else
+                fprintf(out, "%s = %ld\n", line, ret);
+            fflush(out);
+            in_call = 0;
+        }
+    }
+
+    if (summary) print_summary();
+    if (out != stderr) fclose(out);
+    return exit_code;
+}

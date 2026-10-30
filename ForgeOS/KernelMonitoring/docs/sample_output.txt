@@ -1,34 +1,149 @@
-============================================================
-              KERNEL MONITORING SYSTEM
-============================================================
+====================================================
+             KERNEL MONITORING SYSTEM
+====================================================
+All demonstrations will run continuously.
+Press Ctrl+C to stop the program.
 
-CPU INFORMATION
-------------------------------------------------------------
-CPU Model       : 13th Gen Intel(R) Core(TM) i5-1334U
-CPU Cores       : 6
-CPU Frequency   : 2496.000 MHz
 
-MEMORY INFORMATION
-------------------------------------------------------------
-Total Memory    : System dependent
-Available Memory: System dependent
+****************************************************
+              NEW MONITORING CYCLE
+****************************************************
 
-PROCESS INFORMATION
-------------------------------------------------------------
-PID      PROCESS NAME                    STATE    MEMORY(KB)   CPU(%)
----------------------------------------------------------------------
-1        (systemd)                       S        --------     Normal
-2        (kthreadd)                      S        --------     Normal
-...      ...                             ...      ...          ...
+========================================
+PROCESS MANAGEMENT
+========================================
+Parent PID : 592
+Child PID : 593
+Parent waiting for child...
+Child process created.
+Child PID  : 593
+Parent PID : 592
+Child process executing...
+Child process completed.
+Parent process continuing.
 
-STATUS
-------------------------------------------------------------
-Normal          : Normal resource usage
-HIGH CPU        : High CPU usage detected
-HIGH MEMORY     : High memory usage detected
-HIGH CPU+MEM    : High CPU and memory usage detected
+========================================
+PROCESS STATES
+========================================
+Name:   kernel_monitor
+State:  R (running)
+Pid:    592
+PPid:   330
+Process information obtained from /proc.
 
-============================================================
-       MONITORING WILL REFRESH EVERY FEW SECONDS
-       Press Ctrl+C to exit
-============================================================
+========================================
+SIGNALS AND PIPES
+========================================
+Child PID : 594
+Message sent through pipe.
+Parent PID : 592
+Received message: Hello from child through pipe
+Pipe communication completed.
+
+========================================
+MEMORY MANAGEMENT
+========================================
+malloc() allocated memory.
+Stored values: 10 20 30 40 50
+free() released allocated memory.
+Memory mapped successfully.
+munmap() released mapped memory.
+
+========================================
+LINUX FILE I/O
+========================================
+Reading information from /proc/meminfo
+MemTotal:        7971468 kB
+MemFree:         6278688 kB
+MemAvailable:    7423144 kB
+
+Reading CPU information from /proc/cpuinfo
+model name      : 13th Gen Intel(R) Core(TM) i5-1334U
+Linux /proc file reading completed.
+
+========================================
+THREADS AND SYNCHRONIZATION
+========================================
+Thread 1 entered critical section.
+Thread 1 updated counter to 1.
+Thread 2 entered critical section.
+Thread 2 updated counter to 2.
+Final shared counter : 2
+Thread execution completed.
+
+====================================================
+One complete monitoring cycle finished.
+Starting next cycle...
+====================================================
+
+
+****************************************************
+              NEW MONITORING CYCLE
+****************************************************
+
+========================================
+PROCESS MANAGEMENT
+========================================
+Parent PID : 592
+Child PID : 597
+Parent waiting for child...
+Child process created.
+Child PID  : 597
+Parent PID : 592
+Child process executing...
+Child process completed.
+Parent process continuing.
+
+========================================
+PROCESS STATES
+========================================
+Name:   kernel_monitor
+State:  R (running)
+Pid:    592
+PPid:   330
+Process information obtained from /proc.
+
+========================================
+SIGNALS AND PIPES
+========================================
+Child PID : 598
+Message sent through pipe.
+Parent PID : 592
+Received message: Hello from child through pipe
+Pipe communication completed.
+
+========================================
+MEMORY MANAGEMENT
+========================================
+malloc() allocated memory.
+Stored values: 10 20 30 40 50
+free() released allocated memory.
+Memory mapped successfully.
+munmap() released mapped memory.
+
+========================================
+LINUX FILE I/O
+========================================
+Reading information from /proc/meminfo
+MemTotal:        7971468 kB
+MemFree:         6279372 kB
+MemAvailable:    7423860 kB
+
+Reading CPU information from /proc/cpuinfo
+model name      : 13th Gen Intel(R) Core(TM) i5-1334U
+Linux /proc file reading completed.
+
+========================================
+THREADS AND SYNCHRONIZATION
+========================================
+Thread 2 entered critical section.
+Thread 2 updated counter to 1.
+Thread 1 entered critical section.
+Thread 1 updated counter to 2.
+Final shared counter : 2
+Thread execution completed.
+
+====================================================
+One complete monitoring cycle finished.
+Starting next cycle...
+====================================================
